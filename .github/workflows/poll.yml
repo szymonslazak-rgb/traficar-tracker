@@ -1,0 +1,31 @@
+name: Traficar Fleet Tracker
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pobierz repozytorium
+        uses: actions/checkout@v4
+
+      - name: Skonfiguruj Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Pobierz dane i przelicz zamówienia
+        run: python tracker.py
+
+      - name: Zapisz zaktualizowane pliki JSON do repozytorium
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add data/state.json data/daily_stats.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update fleet stats [skip ci]" && git push)
