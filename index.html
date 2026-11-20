@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Traficar vs. Nasza Flota — Completed Days BI</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { background-color: #0b0f19; color: #e2e8f0; font-family: Inter, system-ui, sans-serif; }
+    .card { background-color: #131a2a; border: 1px solid #1e293b; border-radius: 0.75rem; }
+    .input-dark { background-color: #0b0f19; border: 1px solid #334155; color: #f8fafc; border-radius: 0.5rem; padding: 0.45rem 0.65rem; }
+    .input-dark:focus { outline: none; border-color: #a855f7; }
+  </style>
+</head>
+<body class="min-h-screen p-4 md:p-6">
+  <div class="max-w-7xl mx-auto space-y-6">
+
+    <!-- Header -->
+    <header class="card p-4 md:p-5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+      <div>
+        <div class="flex items-center gap-2.5">
+          <span class="inline-block w-3 h-3 rounded-full bg-purple-500"></span>
+          <h1 class="text-xl font-bold text-white tracking-tight">Traficar vs. Nasza Flota</h1>
+          <span id="statusBadge" class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+            Completed Days (PL)
+          </span>
+        </div>
+        <p id="lastSyncInfo" class="text-xs text-slate-400 mt-1">
+          Źródło: <code>data/daily_stats.json</code> • Domyślnie odfiltrowano bieżący niepełny dzień
+        </p>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2.5">
+        <label class="flex items-center gap-2 text-xs text-slate-300 bg-slate-900/80 px-3 py-2 rounded-lg border border-slate-700 cursor-pointer">
+          <input type="checkbox" id="includeTodayToggle" class="accent-purple-500" />
+          <span>Pokaż też dzisiejszy niepełny dzień</span>
+        </label>
+
+        <label class="cursor-pointer bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium px-3.5 py-2 rounded-lg border border-slate-600 transition">
+          Wczytaj daily_stats.json
+          <input type="file" id="jsonFileInput" accept=".json" class="hidden" />
+        </label>
+
+        <button onclick="openOurDataModal()" class="bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition shadow-lg shadow-purple-900/30">
+          + Wpisz Nasze Dane (24h)
+        </button>
+      </div>
+    </header>
+
+    <!-- Filtry -->
+    <section class="card p-4 flex flex-wrap items-center justify-between gap-4">
+      <div class="flex flex-wrap items-center gap-3">
+        <div>
+          <label class="block text-[11px] uppercase tracking-wider text-slate-400 mb-1">Dzień do analizy</label>
+          <select id="daySelect" class="input-dark text-sm min-w-[180px]"></select>
+        </div>
+        <div>
+          <label class="block text-[11px] uppercase tracking-wider text-slate-400 mb-1">Miasto / Strefa</label>
+          <select id="zoneSelect" class="input-dark text-sm min-w-[160px]">
+            <option value="ALL">Wszystkie miasta</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="text-xs text-slate-400">
+        Dane własne zapisywane są lokalnie w przeglądarce (<code>localStorage</code>) lub przez eksport/import JSON.
+      </div>
+    </section>
+
+    <!-- KPI Cards -->
+    <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="card p-4">
+        <div class="text-xs text-slate-400">Zamówienia Traficar (wybrany dzień)</div>
+        <div id="kpiTraficarOrders" class="text-2xl font-bold text-purple-400 mt-1">—</div>
+        <div id="kpiTraficarFleet" class="text-xs text-slate-500 mt-1">Aktywna flota: — aut</div>
+      </div>
+
+      <div class="card p-4">
+        <div class="text-xs text-slate-400">Zamówienia Nasza Flota (wybrany dzień)</div>
+        <div id="kpiOurOrders" class="text-2xl font-bold text-cyan-400 mt-1">—</div>
+        <div id="kpiOurFleet" class="text-xs text-slate-500 mt-1">Aktywna flota: — aut</div>
+      </div>
+
+      <div class="card p-4">
+        <div class="text-xs text-slate-400">Utylizacja (Zamówienia / Auto / Dzień)</div>
+        <div class="flex items-baseline gap-2 mt-1">
+          <span id="kpiOurUtil" class="text-2xl font-bold text-white">—</span>
+          <span class="text-xs text-slate-400">vs Traficar:</span>
+          <span id="kpiTraficarUtil" class="text-sm font-semibold text-purple-300">—</span>
+        </div>
+        <div id="kpiUtilDiff" class="text-xs text-slate-500 mt-1">Wskaźnik efektywności floty</div>
+      </div>
+
+      <div class="card p-4">
+        <div class="text-xs text-slate-400">Udział w Rynku (Market Share)</div>
+        <div id="kpiMarketShare" class="text-2xl font-bold text-emerald-400 mt-1">—</div>
+        <div id="kpiFleetShare" class="text-xs text-slate-500 mt-1">Udział we flocie: —</div>
+      </div>
+    </section>
+
+    <!-- Wykresy -->
+    <section class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div class="card p-4 lg:col-span-2">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-semibold text-white">Zamówienia dzienne (Completed Days): Traficar vs. Nasza Flota</h2>
+        </div>
+        <div class="h-72">
+          <canvas id="dailyTrendChart"></canvas>
+        </div>
+      </div>
+
+      <div class="card p-4">
+        <h2 class="text-sm font-semibold text-white mb-3">Traficar: Zamówienia wg Modelu Auta</h2>
+        <div class="h-72">
+          <canvas id="modelBreakdownChart"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tabela szczegółowa wg modeli -->
+    <section class="card p-4 overflow-x-auto">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold text-white">Rozbicie zamówień Traficara wg rodzaju pojazdu (wybrany dzień)</h2>
+        <span id="tableDayLabel" class="text-xs text-slate-400"></span>
+      </div>
+      <table class="w-full text-left text-sm">
+        <thead class="text-xs uppercase text-slate-400 border-b border-slate-800">
+          <tr>
+            <th class="py-2.5 px-3">Model / Rodzaj auta</th>
+            <th class="py-2.5 px-3 text-right">Liczba zamówień</th>
+            <th class="py-2.5 px-3 text-right">Udział w zamówieniach Traficara</th>
+          </tr>
+        </thead>
+        <tbody id="modelsTableBody" class="divide-y divide-slate-800/70"></tbody>
+      </table>
+    </section>
+
+  </div>
+
+  <!-- Modal do wpisywania Waszych danych raz na 24h -->
+  <div id="ourDataModal" class="fixed inset-0 bg-black/75 hidden items-center justify-center p-4 z-50">
+    <div class="card max-w-xl w-full p-5 space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-base font-bold text-white">Uzupełnij wyniki Naszej Floty (zamknięta doba)</h3>
+        <button onclick="closeOurDataModal()" class="text-slate-400 hover:text-white text-lg">&times;</button>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Data (YYYY-MM-DD)</label>
+          <input type="date" id="modalDate" class="input-dark w-full text-sm" />
+        </div>
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Nasza aktywna flota (szt.)</label>
+          <input type="number" id="modalOurFleet" placeholder="np. 320" class="input-dark w-full text-sm" />
+        </div>
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Nasze zamówienia (szt.)</label>
+          <input type="number" id="modalOurOrders" placeholder="np. 640" class="input-dark w-full text-sm" />
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">
+          Opcjonalnie: Wklej hurtowo wiele dni (format: <code>YYYY-MM-DD, Flota, Zamowienia</code>)
+        </label>
+        <textarea id="modalBulkCsv" rows="4" placeholder="2026-11-18, 320, 615&#10;2026-11-19, 325, 650" class="input-dark w-full text-xs font-mono"></textarea>
+      </div>
+
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeOurDataModal()" class="px-4 py-2 text-xs text-slate-300 hover:text-white">Anuluj</button>
+        <button onclick="saveOurData()" class="bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold px-4 py-2 rounded-lg">
+          Zapisz dane
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const FALLBACK_STATS = {
+      timezone: "Europe/Warsaw",
+      last_updated: null,
+      days: {}
+    };
+
+    let rawStats = FALLBACK_STATS;
+    let ourStats = JSON.parse(localStorage.getItem("our_fleet_daily_v1") || "{}");
+    let trendChart = null;
+    let modelChart = null;
+
+    function getTodayPL() {
+      return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Warsaw" }).format(new Date());
+    }
+
+    async function loadStatsFromRepo() {
+      try {
+        const res = await fetch("./data/daily_stats.json?t=" + Date.now());
+        if (res.ok) {
+          rawStats = await res.json();
+          document.getElementById("lastSyncInfo").innerHTML =
+            `Ostatnia aktualizacja z GitHub Actions: <strong class="text-slate-200">${rawStats.last_updated || "brak"}</strong>`;
+        }
+      } catch (e) {
+        console.warn("Nie udało się pobrać ./data/daily_stats.json automatycznie. Użyj przycisku Wczytaj JSON.");
+      }
+      refreshUI();
+    }
+
+    document.getElementById("jsonFileInput").addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          rawStats = JSON.parse(ev.target.result);
+          document.getElementById("lastSyncInfo").innerHTML =
+            `Wczytano plik lokalny • Ostatni wpis: <strong class="text-slate-200">${rawStats.last_updated || "OK"}</strong>`;
+          refreshUI();
+        } catch (err) {
+          alert("Błąd parsowania pliku JSON.");
+        }
+      };
+      reader.readAsText(file);
+    });
+
+    document.getElementById("includeTodayToggle").addEventListener("change", refreshUI);
+    document.getElementById("daySelect").addEventListener("change", renderSelectedDay);
+    document.getElementById("zoneSelect").addEventListener("change", renderSelectedDay);
+
+    function getFilteredDays() {
+      const today = getTodayPL();
+      const includeToday = document.getElementById("includeTodayToggle").checked;
+      const allKeys = Array.from(new Set([...Object.keys(rawStats.days || {}), ...Object.keys(ourStats)])).sort();
+      return includeToday ? allKeys : allKeys.filter(d => d < today);
+    }
+
+    function refreshUI() {
+      const days = getFilteredDays();
+      const daySelect = document.getElementById("daySelect");
+      const prevDay = daySelect.value;
+
+      daySelect.innerHTML = "";
+      if (days.length === 0) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "Brak zamkniętych dób (czekam na 00:00)";
+        daySelect.appendChild(opt);
+      } else {
+        [...days].reverse().forEach(d => {
+          const opt = document.createElement("option");
+          opt.value = d;
+          opt.textContent = d + (d === getTodayPL() ? " (Dzisiaj - w toku)" : " (Zamknięta doba)");
+          daySelect.appendChild(opt);
+        });
+        if (days.includes(prevDay)) daySelect.value = prevDay;
+      }
+
+      const zones = new Set();
+      Object.values(rawStats.days || {}).forEach(d => {
+        Object.keys(d.by_zone || {}).forEach(z => zones.add(z));
+      });
+      const zoneSelect = document.getElementById("zoneSelect");
+      const prevZone = zoneSelect.value;
+      zoneSelect.innerHTML = '<option value="ALL">Wszystkie miasta</option>';
+      Array.from(zones).sort().forEach(z => {
+        const opt = document.createElement("option");
+        opt.value = z;
+        opt.textContent = z;
+        zoneSelect.appendChild(opt);
+      });
+      if (zones.has(prevZone)) zoneSelect.value = prevZone;
+
+      renderTrendChart(days);
+      renderSelectedDay();
+    }
+
+    function renderSelectedDay() {
+      const selectedDay = document.getElementById("daySelect").value;
+      const selectedZone = document.getElementById("zoneSelect").value;
+      document.getElementById("tableDayLabel").textContent = selectedDay || "—";
+
+      const tDay = (rawStats.days || {})[selectedDay] || { total_orders: 0, by_model: {}, by_zone: {}, unique_cars_seen: 0 };
+      const oDay = ourStats[selectedDay] || { fleet: 0, orders: 0 };
+
+      const traficarOrders = selectedZone === "ALL"
+        ? (tDay.total_orders || 0)
+        : ((tDay.by_zone || {})[selectedZone] || 0);
+
+      const traficarFleet = tDay.unique_cars_seen || 0;
+      const ourOrders = selectedZone === "ALL" ? (oDay.orders || 0) : 0;
+      const ourFleet = selectedZone === "ALL" ? (oDay.fleet || 0) : 0;
+
+      document.getElementById("kpiTraficarOrders").textContent = traficarOrders.toLocaleString("pl-PL");
+      document.getElementById("kpiTraficarFleet").textContent =
+        selectedZone === "ALL" ? `Unikalne auta widziane: ${traficarFleet}` : `Filtr miasta: ${selectedZone}`;
+
+      document.getElementById("kpiOurOrders").textContent = ourOrders > 0 ? ourOrders.toLocaleString("pl-PL") : "Brak wpisu";
+      document.getElementById("kpiOurFleet").textContent = ourFleet > 0 ? `Aktywna flota: ${ourFleet} aut` : "Kliknij '+ Wpisz Nasze Dane'";
+
+      const tUtil = traficarFleet > 0 ? (traficarOrders / traficarFleet) : 0;
+      const oUtil = ourFleet > 0 ? (ourOrders / ourFleet) : 0;
+
+      document.getElementById("kpiTraficarUtil").textContent = tUtil > 0 ? tUtil.toFixed(2) : "—";
+      document.getElementById("kpiOurUtil").textContent = oUtil > 0 ? oUtil.toFixed(2) : "—";
+
+      if (tUtil > 0 && oUtil > 0) {
+        const diffPct = (((oUtil - tUtil) / tUtil) * 100).toFixed(1);
+        document.getElementById("kpiUtilDiff").textContent =
+          (diffPct >= 0 ? `+${diffPct}% wyższa` : `${diffPct}% niższa`) + " rotacja na auto vs Traficar";
+      } else {
+        document.getElementById("kpiUtilDiff").textContent = "Uzupełnij dane własne, aby porównać";
+      }
+
+      const totalMarketOrders = traficarOrders + ourOrders;
+      if (totalMarketOrders > 0 && ourOrders > 0) {
+        const share = ((ourOrders / totalMarketOrders) * 100).toFixed(1);
+        const fleetShare = (traficarFleet + ourFleet) > 0
+          ? ((ourFleet / (traficarFleet + ourFleet)) * 100).toFixed(1)
+          : "—";
+        document.getElementById("kpiMarketShare").textContent = `${share}%`;
+        document.getElementById("kpiFleetShare").textContent = `Udział we flocie: ${fleetShare}%`;
+      } else {
+        document.getElementById("kpiMarketShare").textContent = "—";
+        document.getElementById("kpiFleetShare").textContent = "Udział we flocie: —";
+      }
+
+      renderModelBreakdown(tDay.by_model || {});
+    }
+
+    function renderModelBreakdown(byModel) {
+      const entries = Object.entries(byModel).sort((a, b) => b[1] - a[1]);
+      const total = entries.reduce((acc, [, v]) => acc + v, 0);
+
+      const tbody = document.getElementById("modelsTableBody");
+      tbody.innerHTML = "";
+
+      if (entries.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="3" class="py-4 px-3 text-center text-slate-500 text-xs">Brak danych o zamówieniach dla wybranego dnia</td></tr>`;
+      } else {
+        entries.forEach(([model, count]) => {
+          const pct = total > 0 ? ((count / total) * 100).toFixed(1) : "0.0";
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td class="py-2.5 px-3 font-medium text-slate-200">${model}</td>
+            <td class="py-2.5 px-3 text-right text-purple-300 font-semibold">${count}</td>
+            <td class="py-2.5 px-3 text-right text-slate-400">${pct}%</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      }
+
+      const ctx = document.getElementById("modelBreakdownChart").getContext("2d");
+      if (modelChart) modelChart.destroy();
+      modelChart = new Chart(ctx, {
+        type: "doughnut",
+        data: {
+          labels: entries.map(e => e[0]),
+          datasets: [{
+            data: entries.map(e => e[1]),
+            backgroundColor: ["#a855f7", "#06b6d4", "#10b981", "#f59e0b", "#6366f1", "#ec4899"],
+            borderWidth: 0
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { position: "bottom", labels: { color: "#cbd5e1", font: { size: 11 } } }
+          }
+        }
+      });
+    }
+
+    function renderTrendChart(days) {
+      const ctx = document.getElementById("dailyTrendChart").getContext("2d");
+      if (trendChart) trendChart.destroy();
+
+      const traficarSeries = days.map(d => ((rawStats.days || {})[d] || {}).total_orders || 0);
+      const ourSeries = days.map(d => (ourStats[d] || {}).orders || null);
+
+      trendChart = new Chart(ctx, {
+        type: "bar",
+        data: {
+          labels: days,
+          datasets: [
+            {
+              label: "Traficar (zamówienia)",
+              data: traficarSeries,
+              backgroundColor: "rgba(168, 85, 247, 0.75)",
+              borderRadius: 4
+            },
+            {
+              label: "Nasza Flota (zamówienia)",
+              data: ourSeries,
+              backgroundColor: "rgba(6, 182, 212, 0.85)",
+              borderRadius: 4
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: { ticks: { color: "#94a3b8" }, grid: { color: "#1e293b" } },
+            y: { beginAtZero: true, ticks: { color: "#94a3b8" }, grid: { color: "#1e293b" } }
+          },
+          plugins: {
+            legend: { labels: { color: "#e2e8f0" } }
+          }
+        }
+      });
+    }
+
+    function openOurDataModal() {
+      const days = getFilteredDays();
+      const defaultDate = days.length > 0 ? days[days.length - 1] : getTodayPL();
+      document.getElementById("modalDate").value = defaultDate;
+      const existing = ourStats[defaultDate] || {};
+      document.getElementById("modalOurFleet").value = existing.fleet || "";
+      document.getElementById("modalOurOrders").value = existing.orders || "";
+      document.getElementById("ourDataModal").classList.remove("hidden");
+      document.getElementById("ourDataModal").classList.add("flex");
+    }
+
+    function closeOurDataModal() {
+      document.getElementById("ourDataModal").classList.add("hidden");
+      document.getElementById("ourDataModal").classList.remove("flex");
+    }
+
+    function saveOurData() {
+      const d = document.getElementById("modalDate").value;
+      const fleet = parseInt(document.getElementById("modalOurFleet").value, 10);
+      const orders = parseInt(document.getElementById("modalOurOrders").value, 10);
+
+      if (d && (!isNaN(fleet) || !isNaN(orders))) {
+        ourStats[d] = { fleet: fleet || 0, orders: orders || 0 };
+      }
+
+      const bulk = document.getElementById("modalBulkCsv").value.trim();
+      if (bulk) {
+        bulk.split("\n").forEach(line => {
+          const parts = line.split(",").map(s => s.trim());
+          if (parts.length >= 3 && /^\d{4}-\d{2}-\d{2}$/.test(parts[0])) {
+            ourStats[parts[0]] = {
+              fleet: parseInt(parts[1], 10) || 0,
+              orders: parseInt(parts[2], 10) || 0
+            };
+          }
+        });
+      }
+
+      localStorage.setItem("our_fleet_daily_v1", JSON.stringify(ourStats));
+      document.getElementById("modalBulkCsv").value = "";
+      closeOurDataModal();
+      refreshUI();
+    }
+
+    loadStatsFromRepo();
+  </script>
+</body>
+</html>
