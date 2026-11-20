@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from urllib.request import urlopen, Request
+from urllib.error import HTTPError
 
 API_BASE = "https://fioletowe.live/api/v1"
 STATE_FILE = "data/state.json"
@@ -12,12 +13,27 @@ TZ_PL = ZoneInfo("Europe/Warsaw")
 
 
 def fetch_json(endpoint):
+    url = f"{API_BASE}{endpoint}"
     req = Request(
-        f"{API_BASE}{endpoint}",
-        headers={"User-Agent": "FleetTracker-BI/1.1"}
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Referer": "https://fioletowe.live/",
+            "Origin": "https://fioletowe.live"
+        }
     )
-    with urlopen(req, timeout=20) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="ignore")
+        except Exception:
+            pass
+        print(f"BŁĄD HTTP {e.code} dla {url} -> Odpowiedź serwera: {body}")
+        raise
 
 
 def haversine_m(lat1, lon1, lat2, lon2):
@@ -69,7 +85,6 @@ def main():
             "unique_cars_seen": 0
         }
 
-    # Trzymamy tylko ostatnie 7 dni w state.json, żeby plik nie puchł
     seen_today = set(state.get("seen_by_day", {}).get(today_str, []))
 
     current_cars = {}
@@ -94,12 +109,10 @@ def main():
         }
         seen_today.add(car_id)
 
-    # Zapisz zniknięcia
     for car_id, prev in state["available"].items():
         if car_id not in current_cars and car_id not in state["missing"]:
             state["missing"][car_id] = prev
 
-    # Weryfikacja powrotów
     returned_ids = []
     for car_id, miss_info in state["missing"].items():
         if car_id in current_cars:
@@ -108,7 +121,6 @@ def main():
             fuel_drop = miss_info["fuel"] - curr["fuel"]
             duration_min = (now_pl - datetime.fromisoformat(miss_info["ts"])).total_seconds() / 60.0
 
-            # Realne zamówienie: min. 5 min nieobecności ORAZ (zmiana miejsca > 250m lub zużycie paliwa)
             if duration_min >= 4.5 and (dist > 250 or fuel_drop > 0):
                 start_day = miss_info["ts"][:10]
                 if start_day not in stats["days"]:
@@ -129,7 +141,6 @@ def main():
     for cid in returned_ids:
         del state["missing"][cid]
 
-    # Czyszczenie starych dni ze state.json
     recent_days = sorted(list(state.get("seen_by_day", {}).keys()) + [today_str])[-7:]
     new_seen = {d: state.get("seen_by_day", {}).get(d, []) for d in recent_days}
     new_seen[today_str] = list(seen_today)
