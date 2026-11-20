@@ -1,9 +1,11 @@
 import json
 import math
 import os
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from urllib.request import urlopen, Request
+from http.cookiejar import CookieJar
+from urllib.request import build_opener, HTTPCookieProcessor, Request
 from urllib.error import HTTPError
 
 API_BASE = "https://fioletowe.live/api/v1"
@@ -11,29 +13,85 @@ STATE_FILE = "data/state.json"
 STATS_FILE = "data/daily_stats.json"
 TZ_PL = ZoneInfo("Europe/Warsaw")
 
+cj = CookieJar()
+opener = build_opener(HTTPCookieProcessor(cj))
 
-def fetch_json(endpoint):
-    url = f"{API_BASE}{endpoint}"
-    req = Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Referer": "https://fioletowe.live/",
-            "Origin": "https://fioletowe.live"
-        }
-    )
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://fioletowe.live/",
+    "Origin": "https://fioletowe.live"
+}
+
+
+def init_session():
+    req = Request("https://fioletowe.live/", headers=HEADERS)
+    with opener.open(req, timeout=20) as resp:
+        html = resp.read().decode("utf-8", errors="ignore")
+        print(f"Sesja zainicjowana. Ciasteczka: {[c.name for c in cj]}")
+        return html
+
+
+def fetch_json(url, extra_headers=None):
+    hdrs = dict(HEADERS)
+    if extra_headers:
+        hdrs.update(extra_headers)
+    req = Request(url, headers=hdrs)
+    with opener.open(req, timeout=20) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def get_cars_data():
+    # 1. Próba standardowa z ciasteczkami sesyjnymi
     try:
-        with urlopen(req, timeout=20) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        return fetch_json(f"{API_BASE}/cars")
     except HTTPError as e:
-        body = ""
-        try:
-            body = e.read().decode("utf-8", errors="ignore")
-        except Exception:
-            pass
-        print(f"BŁĄD HTTP {e.code} dla {url} -> Odpowiedź serwera: {body}")
-        raise
+        print(f"/api/v1/cars zwróciło {e.code}, sprawdzam specyfikację autoryzacji i /cars/nearby...")
+
+    # 2. Sprawdź schemat autoryzacji w openapi.json
+    try:
+        spec = fetch_json("https://fioletowe.live/api/openapi.json")
+        sec = spec.get("components", {}).get("securitySchemes", {})
+        cars_path = spec.get("paths", {}).get("/api/v1/cars", {})
+        nearby_path = spec.get("paths", {}).get("/api/v1/cars/nearby", {})
+        print(f"SecuritySchemes: {json.dumps(sec)}")
+        print(f"Params /cars: {json.dumps(cars_path.get('get', {}).get('parameters', []))}")
+        print(f"Params /cars/nearby: {json.dumps(nearby_path.get('get', {}).get('parameters', []))}")
+    except Exception as ex:
+        print(f"Nie udało się pobrać openapi.json: {ex}")
+
+    # 3. Próba przez /api/v1/cars/nearby dla głównych aglomeracji w Polsce
+    cities = [
+        ("Warszawa", 52.2297, 21.0122),
+        ("Kraków", 50.0647, 19.9450),
+        ("Trójmiasto", 54.3722, 18.6383),
+        ("Wrocław", 51.1079, 17.0385),
+        ("Poznań", 52.4064, 16.9252),
+        ("Katowice", 50.2649, 19.0238),
+        ("Łódź", 51.7592, 19.4560),
+    ]
+    all_cars = {}
+    for name, lat, lon in cities:
+        for query in [
+            f"lat={lat}&lon={lon}&radius=35000",
+            f"latitude={lat}&longitude={lon}&radius=35000",
+            f"lat={lat}&lng={lon}&radius=35000"
+        ]:
+            try:
+                res = fetch_json(f"{API_BASE}/cars/nearby?{query}")
+                items = res if isinstance(res, list) else res.get("items", res.get("cars", res.get("data", [])))
+                for c in items:
+                    cid = str(c.get("id") or c.get("sideNumber") or c.get("plate"))
+                    all_cars[cid] = c
+                print(f"Pobrano {len(items)} aut dla {name} ({query})")
+                break
+            except HTTPError:
+                continue
+
+    if all_cars:
+        return list(all_cars.values())
+
+    raise RuntimeError("Wszystkie metody pobrania aut zwróciły błąd — sprawdź logi powyżej.")
 
 
 def haversine_m(lat1, lon1, lat2, lon2):
@@ -63,13 +121,14 @@ def main():
     now_iso = now_pl.isoformat()
     today_str = now_pl.strftime("%Y-%m-%d")
 
-    models_raw = fetch_json("/car-models")
-    zones_raw = fetch_json("/zones")
-    cars_raw = fetch_json("/cars")
+    init_session()
+    models_raw = fetch_json(f"{API_BASE}/car-models")
+    zones_raw = fetch_json(f"{API_BASE}/zones")
+    cars_raw = get_cars_data()
 
     models_list = models_raw if isinstance(models_raw, list) else models_raw.get("items", models_raw.get("data", []))
     zones_list = zones_raw if isinstance(zones_raw, list) else zones_raw.get("items", zones_raw.get("data", []))
-    cars_list = cars_raw if isinstance(cars_raw, list) else cars_raw.get("items", cars_raw.get("data", []))
+    cars_list = cars_raw if isinstance(cars_raw, list) else cars_raw.get("items", cars_raw.get("cars", cars_raw.get("data", [])))
 
     models_map = {str(m.get("id")): m.get("name", f"Model {m.get('id')}") for m in models_list}
     zones_map = {str(z.get("id")): z.get("name", f"Strefa {z.get('id')}") for z in zones_list}
@@ -152,7 +211,7 @@ def main():
 
     save_json(STATE_FILE, state)
     save_json(STATS_FILE, stats)
-    print(f"[{now_iso}] OK. Wolne: {len(current_cars)}, W trasie: {len(state['missing'])}, Zamówienia dziś: {stats['days'][today_str]['total_orders']}")
+    print(f"[{now_iso}] SUKCES! Wolne auta: {len(current_cars)}, W trasie: {len(state['missing'])}")
 
 
 if __name__ == "__main__":
